@@ -56,6 +56,7 @@ if [[ -z $fast_urls ]]; then
 fi
 
 traffic_pids=()
+parent_pid=$$
 
 cleanup() {
   local pid
@@ -82,6 +83,19 @@ traffic_worker() {
   local urls=("$@")
   local url_count=${#urls[@]}
   local idx=$RANDOM
+  # cleanup never runs if this script is SIGKILLed, and dismissing the
+  # overlay mid-run does just that: the shell stops the panel's Process
+  # (SIGTERM) and unloads the panel right after, and the Process destructor
+  # SIGKILLs the script before its EXIT trap gets to signal anything. So
+  # each worker also watches the parent, and once it is gone takes down its
+  # own process group, this watchdog included. $$ still names the parent in
+  # here; set -m made the worker a process group leader, so the group to
+  # signal is its own pid.
+  local pgid=$BASHPID
+  (
+    while kill -0 "$parent_pid" 2>/dev/null; do sleep 0.5; done
+    kill -TERM -- "-$pgid" 2>/dev/null || true
+  ) &
   if [[ $direction == "down" ]]; then
     while true; do
       url=${urls[$((idx % url_count))]}
